@@ -15,12 +15,16 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 class ClaimService : AccessibilityService() {
     companion object { @Volatile var inst: ClaimService? = null }
 
     private var panel: LinearLayout? = null
     private var running = false
+    private val ocr by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     override fun onServiceConnected() { inst = this; showPanel() }
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
@@ -54,6 +58,23 @@ class ClaimService : AccessibilityService() {
         })
     }
 
+    fun cari(bm: Bitmap, target: String, done: (Pair<Float, Float>?, String) -> Unit) {
+        ocr.process(InputImage.fromBitmap(bm, 0))
+            .addOnSuccessListener { r ->
+                val semua = ArrayList<String>()
+                var hit: Pair<Float, Float>? = null
+                for (b in r.textBlocks) for (l in b.lines) {
+                    semua.add(l.text)
+                    val bb = l.boundingBox
+                    if (hit == null && bb != null && l.text.contains(target, ignoreCase = true)) {
+                        hit = Pair(bb.centerX().toFloat(), bb.centerY().toFloat())
+                    }
+                }
+                done(hit, semua.joinToString(" | "))
+            }
+            .addOnFailureListener { done(null, "OCR gagal: " + it.message) }
+    }
+
     private fun tesLayar(st: TextView) {
         shot { bm ->
             if (bm == null) { st.text = "Screenshot gagal (butuh Android 11+)"; return@shot }
@@ -62,6 +83,23 @@ class ClaimService : AccessibilityService() {
             st.text = "Layar terbaca ${w}x$h, mengetuk tengah..."
             tap(w / 2f, h / 2f) { ok ->
                 st.text = "Layar ${w}x$h - ketuk " + (if (ok) "berhasil" else "gagal")
+            }
+        }
+    }
+
+    private fun tesKlaim(st: TextView) {
+        st.text = "Membaca layar..."
+        shot { bm ->
+            if (bm == null) { st.text = "Screenshot gagal"; return@shot }
+            cari(bm, "Klaim Semua") { hit, semua ->
+                if (hit == null) {
+                    st.text = "Tidak ketemu. Terbaca: " + semua.take(150)
+                } else {
+                    st.text = "Ketemu di ${hit.first.toInt()},${hit.second.toInt()} - mengetuk"
+                    tap(hit.first, hit.second) { ok ->
+                        st.text = "Ketuk Klaim Semua " + (if (ok) "berhasil" else "gagal")
+                    }
+                }
             }
         }
     }
@@ -75,7 +113,7 @@ class ClaimService : AccessibilityService() {
             setPadding((8 * d).toInt(), (6 * d).toInt(), (8 * d).toInt(), (6 * d).toInt())
         }
         val st = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 11f; text = "Bot Lutpii siap (Tahap 1)"
+            setTextColor(Color.WHITE); textSize = 11f; text = "Bot Lutpii siap (Tahap 2)"
         }
         val row = LinearLayout(this)
         val b1 = Button(this).apply { text = "Mulai"; textSize = 11f; isAllCaps = false }
@@ -86,8 +124,11 @@ class ClaimService : AccessibilityService() {
         }
         val b2 = Button(this).apply { text = "Tes"; textSize = 11f; isAllCaps = false }
         b2.setOnClickListener { tesLayar(st) }
+        val b3 = Button(this).apply { text = "Klaim?"; textSize = 11f; isAllCaps = false }
+        b3.setOnClickListener { tesKlaim(st) }
         row.addView(b1)
         row.addView(b2)
+        row.addView(b3)
         box.addView(st)
         box.addView(row)
         val lp = WindowManager.LayoutParams(
